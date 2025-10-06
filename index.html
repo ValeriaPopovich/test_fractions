@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Проверочная по дробям — FINAL (офлайн)</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root{ --bg1:#ffe9f0; --bg2:#e7f2ff; --card:#fff; --text:#513a45; --accent:#ff84b7; --accent2:#71b7ff; --ok:#67c587; --bad:#ff6b6b; --shadow:0 10px 30px rgba(0,0,0,.08) }
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:linear-gradient(180deg,var(--bg1),var(--bg2));font-family:'Poppins',system-ui,sans-serif;color:var(--text);padding:clamp(12px,3vw,28px)}
+    h1{margin:0 0 8px;text-align:center;color:var(--accent)}
+    .container{max-width:980px;margin:0 auto}
+    .topbar{display:flex;gap:10px;align-items:center;justify-content:space-between}
+    .btn{appearance:none;border:none;border-radius:16px;padding:12px 16px;font-weight:700;cursor:pointer}
+    .btn.secondary{background:#fff;border:2px solid var(--accent);color:var(--accent)}
+    .btn.primary{background:linear-gradient(90deg,var(--accent),#ffa8d0);color:#fff;box-shadow:var(--shadow)}
+    .progress{height:10px;background:#ffffffaa;border-radius:999px;overflow:hidden;box-shadow:inset 0 0 0 1px #f1cfe2}
+    .progress>span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .4s}
+    .q{background:var(--card);border-radius:20px;padding:16px;box-shadow:var(--shadow);margin:14px 0;border:1px solid #f6d8e6}
+    .q h3{margin:0 0 10px;font-weight:700}
+    .q.wrong{border-color:#ffb3c1;background:linear-gradient(0deg,#fff6fa,#ffffff)}
+    .q.wrong h3{color:#b2415b}
+    .opt{display:block;margin:6px 0;padding:6px 8px;border-radius:12px}
+    .opt:hover{background:#faf5ff}
+    input[type="text"]{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #e7d0e0}
+    #result{display:none;text-align:center;border-radius:22px;padding:18px;font-weight:800;margin-top:12px}
+
+    /* Инлайн-дроби */
+    .frac{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;vertical-align:baseline;position:relative;top:-0.22em}
+    .frac>.n{display:block;border-bottom:0.09em solid currentColor;padding:0 .18em}
+    .frac>.d{display:block;padding-top:.06em}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Проверочная работа: обыкновенные дроби</h1>
+
+    <div class="topbar">
+      <button id="reset" class="btn secondary" type="button">Сброс</button>
+      <div style="flex:1"></div>
+      <div style="min-width:280px">
+        <div class="progress"><span id="bar"></span></div>
+        <small id="ptext">Заполнено: 0%</small>
+      </div>
+    </div>
+
+    <main id="quiz"></main>
+
+    <div style="display:flex;justify-content:center;margin-top:16px">
+      <button id="submit" class="btn primary" type="button">Отправить ответы</button>
+    </div>
+
+    <div id="result"></div>
+  </div>
+
+  <script>
+    // ---------- офлайн-парсер TeX дробей (без MathJax) ----------
+    function normalizeLatex(str){
+      return str
+        .replace(/(^|[^\\])((?:d|t)?frac\{)/g, '$1\\$2')
+        .replace(/(^|[^\\])(cdot|div|times|left|right)\b/g, '$1\\$2');
+    }
+    function readGroup(s, i){
+      if (s[i] !== '{') return { text: '', next: i };
+      let depth = 0, j = i, out = '';
+      while (j < s.length){
+        const ch = s[j++];
+        if (ch === '{'){ if (depth++) out += ch; }
+        else if (ch === '}'){ if (--depth === 0) break; else out += ch; }
+        else out += ch;
+      }
+      return { text: out, next: j };
+    }
+    function texToHtmlInline(src){
+      if (!src) return '';
+      let s = normalizeLatex(src)
+        .replace(/\$/g,'')
+        .replace(/\\[,;!]/g,' ')
+        .replace(/\\left\s*/g,'')
+        .replace(/\\right\s*/g,'')
+        .replace(/\\times/g,' × ')
+        .replace(/\\cdot/g,' × ')
+        .replace(/\\div/g,' ÷ ');
+
+      let i = 0, out = '';
+      while (i < s.length){
+        if (s[i] === '\\'){
+          let j = i+1;
+          while (j < s.length && /[A-Za-z]/.test(s[j])) j++;
+          const cmd = s.slice(i+1, j);
+          if (cmd === 'frac' || cmd === 'dfrac' || cmd === 'tfrac'){
+            const g1 = readGroup(s, j);
+            const g2 = readGroup(s, g1.next);
+            if (s[g1.next-1] === '}' && s[g2.next-1] === '}'){
+              out += `<span class="frac"><span class="n">${g1.text}</span><span class="d">${g2.text}</span></span>`;
+              i = g2.next;
+              continue;
+            }
+          }
+          out += s[i]; i++;
+        } else out += s[i++];
+      }
+      /* 🔧 Удаляем лишние префиксы \d / \t перед уже отрисованной дробью */
+      out = out.replace(/\\[dt](?=\s*<span class="frac">)/g, '');
+      return out;
+    }
+    function renderFractions(root){
+      const box = root || document;
+      box.querySelectorAll('.q h3, .q label span').forEach(el=>{
+        el.innerHTML = texToHtmlInline(el.innerHTML);
+      });
+    }
+
+    // ---------- задания 1..20 ----------
+    const tasks = [
+      // 1) Теория
+      {id:'t01',type:'mc',prompt:'Зачем нужны дроби?',opts:[
+        'Чтобы записывать часть целого и результат деления','Чтобы обозначать порядковые номера','Только для периметров'
+      ],correct:0},
+      {id:'t02',type:'mc',prompt:'Что означает черта дроби в $\\dfrac{a}{b}$?',opts:[
+        'Сложение','Операцию деления $a:b$','Возведение в степень'
+      ],correct:1},
+      {id:'t03',type:'mc',prompt:'В дроби $\\dfrac{5}{8}$ число 8 — это…',opts:[
+        'числитель','знаменатель','множитель'
+      ],correct:1},
+
+      // 2) Переводы
+      {id:'t04',type:'mc',prompt:'Переведи $1\\,\\dfrac{3}{5}$ в неправильную дробь.',opts:[
+        '$\\dfrac{8}{5}$','$\\dfrac{6}{5}$','$\\dfrac{13}{5}$','$\\dfrac{5}{8}$'
+      ],correct:0},
+      {id:'t05',type:'mc',prompt:'Переведи $\\dfrac{11}{6}$ в смешанное число.',opts:[
+        '$1\\,\\dfrac{5}{6}$','$2\\,\\dfrac{1}{6}$','$1\\,\\dfrac{1}{6}$','$2\\,\\dfrac{5}{6}$'
+      ],correct:0},
+      {id:'t06',type:'mc',prompt:'Переведи $\\dfrac{9}{4}$ в смешанное число.',opts:[
+        '$2\\,\\dfrac{1}{4}$','$1\\,\\dfrac{3}{4}$','$2\\,\\dfrac{2}{4}$','$3\\,\\dfrac{1}{4}$'
+      ],correct:0},
+
+      // 3) Сравнение
+      {id:'t07',type:'mc',prompt:'Что больше: $\\dfrac{3}{7}$ или $\\dfrac{5}{7}$?',opts:[
+        '$\\dfrac{3}{7}$','$\\dfrac{5}{7}$','равны'
+      ],correct:1},
+      {id:'t08',type:'mc',prompt:'Что больше: $\\dfrac{3}{8}$ или $\\dfrac{3}{5}$?',opts:[
+        '$\\dfrac{3}{8}$','$\\dfrac{3}{5}$','равны'
+      ],correct:1},
+      {id:'t09',type:'mc',prompt:'Что больше: $\\dfrac{5}{12}$ или $\\dfrac{7}{18}$?',opts:[
+        '$\\dfrac{5}{12}$','$\\dfrac{7}{18}$','равны'
+      ],correct:0},
+
+      // 4) Сокращение
+      {id:'t10',type:'mc',prompt:'Сократи дробь $\\dfrac{15}{25}$ до наименьшего вида.',opts:[
+        '$\\dfrac{3}{5}$','$\\dfrac{5}{9}$','$\\dfrac{15}{25}$','$\\dfrac{6}{10}$'
+      ],correct:0},
+
+      // 5) Сложение/вычитание
+      {id:'t11',type:'mc',prompt:'Вычисли: $\\dfrac{1}{2}+\\dfrac{1}{3}=$',opts:[
+        '$\\dfrac{5}{6}$','$\\dfrac{2}{5}$','$\\dfrac{1}{6}$','$1$'
+      ],correct:0},
+      {id:'t12',type:'mc',prompt:'Вычисли: $1\\,\\dfrac{1}{2}+2\\,\\dfrac{1}{3}=$',opts:[
+        '$3\\,\\dfrac{5}{6}$','$2\\,\\dfrac{5}{6}$','$3\\,\\dfrac{1}{6}$','$4$'
+      ],correct:0},
+      {id:'t13',type:'mc',prompt:'Вычисли: $\\dfrac{5}{6}-\\dfrac{1}{2}=$',opts:[
+        '$\\dfrac{1}{3}$','$\\dfrac{2}{3}$','$\\dfrac{1}{6}$','$\\dfrac{4}{6}$'
+      ],correct:0},
+      {id:'t14',type:'mc',prompt:'Вычисли: $3\\,\\dfrac{1}{4}-1\\,\\dfrac{5}{8}=$',opts:[
+        '$1\\,\\dfrac{5}{8}$','$1\\,\\dfrac{3}{8}$','$2$','$\\dfrac{11}{8}$'
+      ],correct:0},
+
+      // 6) Умножение/деление
+      {id:'t15',type:'mc',prompt:'Вычисли: $\\dfrac{3}{4}\\cdot\\dfrac{2}{5}=$',opts:[
+        '$\\dfrac{3}{10}$','$\\dfrac{3}{20}$','$\\dfrac{7}{10}$','$\\dfrac{5}{6}$'
+      ],correct:0},
+      {id:'t16',type:'mc',prompt:'Вычисли: $\\dfrac{2}{3} \\div \\dfrac{4}{9}=$',opts:[
+        '$1\\,\\dfrac{1}{2}$','$\\dfrac{1}{6}$','$\\dfrac{8}{27}$','$\\dfrac{1}{2}$'
+      ],correct:0},
+
+      // 7) Прикладные
+      {id:'t17',type:'input',prompt:'В школьной библиотеке было 40 книг по математике. На выставку взяли $\\dfrac{3}{5}$ всех книг. Сколько книг взяли? (введи число)',check:(v)=>Number(v)===24},
+{id:'t18', type:'input',
+  prompt:'Число, $\\dfrac{3}{7}$ которого равно 12. Найди число (введи число).',
+  check:(v)=>Number(v)===28
+},
+
+      // 8) Итоговые
+      {id:'t19',type:'mc',prompt:'Вычисли: $\\left(2\\,\\dfrac{1}{3}+1\\,\\dfrac{2}{3}\\right) \\div \\left(1\\,\\dfrac{1}{3}\\right) \\cdot \\left(1\\,\\dfrac{1}{2} \\div 1\\,\\dfrac{1}{2}\\right)=$',opts:['$2$','$3$','$4$','$1$'],correct:1},
+      {id:'t20',type:'mc',prompt:'Вычисли: $\\left(\\dfrac{3}{8}+\\dfrac{5}{16}\\right) \\div \\left(\\dfrac{7}{12}-\\dfrac{1}{8}\\right) \\cdot 2 - 1=$',opts:['$2$','$3$','$4$','$1$'],correct:0}
+    ];
+
+    // ---------- рендер теста ----------
+    const quiz   = document.getElementById('quiz');
+    const bar    = document.getElementById('bar');
+    const ptext  = document.getElementById('ptext');
+    const result = document.getElementById('result');
+
+    function shuffle(arr){ return arr.map(v=>[Math.random(),v]).sort((a,b)=>a[0]-b[0]).map(v=>v[1]); }
+
+    function render(){
+      quiz.innerHTML = tasks.map((t,idx)=>{
+        const num = idx+1;
+        if(t.type==='mc'){
+          const packed   = t.opts.map((text,i)=>({ text, i }));
+          const shuffled = shuffle(packed);
+          const correctPos = shuffled.findIndex(o=>o.i===t.correct);
+          const optsHtml = shuffled
+            .map((o,pos)=>`<label class="opt"><input type="radio" name="${t.id}" value="${pos}"> <span>${o.text}</span></label>`)
+            .join('');
+          return `<section class="q" data-id="${t.id}" data-correct="${correctPos}">
+                    <h3>${num}) ${t.prompt}</h3>${optsHtml}
+                  </section>`;
+        } else {
+          return `<section class="q" data-id="${t.id}">
+                    <h3>${num}) ${t.prompt}</h3>
+                    <input type="text" name="${t.id}" placeholder="ответ" inputmode="numeric" />
+                  </section>`;
+        }
+      }).join('');
+      renderFractions(quiz);
+      updateProgress();
+    }
+
+    // ---------- прогресс/проверка ----------
+    function answered(t){
+      if(t.type==='mc') return !!document.querySelector(`input[name="${t.id}"]:checked`);
+      if(t.type==='input'){ const el=document.querySelector(`[name="${t.id}"]`); return el && el.value.trim()!=='' }
+      return false;
+    }
+    function updateProgress(){
+      const done = tasks.filter(answered).length;
+      const p = Math.round(100*done/tasks.length);
+      bar.style.width = p+'%';
+      ptext.textContent = `Заполнено: ${p}% (${done} из ${tasks.length})`;
+    }
+    document.addEventListener('input',updateProgress);
+    document.addEventListener('change',updateProgress);
+
+    function grade(){
+      let score=0; const total=tasks.length; const wrongIdx=[];
+      document.querySelectorAll('.q').forEach(q=>q.classList.remove('wrong'));
+      tasks.forEach((t,idx)=>{
+        const num = idx+1;
+        if(t.type==='mc'){
+          const sec=document.querySelector(`section[data-id="${t.id}"]`);
+          const correctPos = Number(sec?.dataset.correct||-1);
+          const el=document.querySelector(`input[name="${t.id}"]:checked`);
+          if(el && Number(el.value)===correctPos) score++; else { wrongIdx.push(num); sec.classList.add('wrong'); }
+        } else {
+          const v=(document.querySelector(`[name="${t.id}"]`)?.value||'').trim();
+          if(v && t.check && t.check(v)) score++; else { wrongIdx.push(num); const sec=document.querySelector(`section[data-id="${t.id}"]`); sec.classList.add('wrong'); }
+        }
+      });
+      const percent=Math.round(100*score/total);
+      let gradeNum; if(percent<50) gradeNum=2; else if(percent<70) gradeNum=3; else if(percent<85) gradeNum=4; else gradeNum=5;
+      const msg = gradeNum>=4 ? 'Отличная работа! Вы молодцы! ✨' : (gradeNum===3 ? 'Хорошо! Ещё немного — и будет 4! 💪' : 'Не сдаёмся! Получится ещё лучше в следующий раз 💖');
+      const errText = wrongIdx.length? `Ошибки: № ${wrongIdx.join(', ')}` : 'Ошибок нет — браво! 🎉';
+      result.style.display='block';
+      result.style.background = percent>=70? 'var(--ok)': 'var(--bad)';
+      result.style.color='#fff';
+      result.textContent = `Верно: ${score} из ${total} (${percent}%). Оценка: ${gradeNum}. ${msg} ${errText}`;
+    }
+
+    document.addEventListener('DOMContentLoaded', ()=>{
+      render();
+      document.getElementById('submit').addEventListener('click', grade);
+      document.getElementById('reset').addEventListener('click',()=>{
+        document.querySelectorAll('input[type="radio"]').forEach(i=>i.checked=false);
+        document.querySelectorAll('input[type="text"]').forEach(i=>i.value='');
+        document.querySelectorAll('.q').forEach(q=>q.classList.remove('wrong'));
+        result.style.display='none'; updateProgress();
+        window.scrollTo({top:0,behavior:'smooth'});
+      });
+    });
+  </script>
+</body>
+</html>
